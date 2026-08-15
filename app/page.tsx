@@ -54,7 +54,12 @@ export default function HomePage() {
         throw new Error(data?.error || "Something went wrong while analyzing your resume.");
       }
 
-      router.push("/portfolio");
+      const targetId = data?.portfolioId || data?.id;
+      if (targetId) {
+        router.push(`/portfolio?id=${targetId}`);
+      } else {
+        router.push("/portfolio");
+      }
     } catch (err) {
       setStatus("error");
       setErrorMessage(err instanceof Error ? err.message : "Unexpected error. Please try again.");

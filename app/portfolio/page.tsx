@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 
 export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 type Project = {
   name: string;
@@ -58,16 +59,28 @@ type Portfolio = {
   created_at: string;
 };
 
-async function getLatestPortfolio(): Promise<Portfolio | null> {
+async function getPortfolio(id?: string): Promise<Portfolio | null> {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
   if (!supabaseUrl || !supabaseKey) return null;
 
   const supabase = createClient(supabaseUrl, supabaseKey);
+
+  if (id) {
+    const { data: byId } = await supabase
+      .from("portfolios")
+      .select("*")
+      .eq("id", id)
+      .maybeSingle();
+
+    if (byId) return byId as Portfolio;
+  }
+
   const { data, error } = await supabase
     .from("portfolios")
     .select("*")
+    .neq("name", "")
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -91,8 +104,13 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
-export default async function PortfolioPage() {
-  const portfolio = await getLatestPortfolio();
+export default async function PortfolioPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ id?: string }> | { id?: string };
+}) {
+  const params = searchParams ? await searchParams : undefined;
+  const portfolio = await getPortfolio(params?.id);
 
   if (!portfolio) {
     return (
