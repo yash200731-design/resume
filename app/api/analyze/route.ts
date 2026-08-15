@@ -45,7 +45,6 @@ function jsonError(message: string, status: number) {
 }
 
 function extractJsonBlock(raw: string): string {
-  // Strip potential markdown fences if returned despite prompt rules
   const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
   if (fenced) return fenced[1].trim();
 
@@ -125,13 +124,13 @@ function normalizeResume(parsed: Record<string, unknown>): ResumeData {
 export async function POST(req: NextRequest) {
   try {
     // ---- 1. Check Environment Variables ----
-    const geminiKey = process.env.GEMINI_API_KEY;
+    const apiKey = process.env.GEMINI_API_KEY || process.env.OPENROUTER_API_KEY;
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-    if (!geminiKey || !supabaseUrl || !supabaseKey) {
+    if (!apiKey || !supabaseUrl || !supabaseKey) {
       return jsonError(
-        "Server is missing required environment variables. Check GEMINI_API_KEY, NEXT_PUBLIC_SUPABASE_URL, and NEXT_PUBLIC_SUPABASE_ANON_KEY in .env.local.",
+        "Server is missing required environment variables. Check GEMINI_API_KEY, NEXT_PUBLIC_SUPABASE_URL, and NEXT_PUBLIC_SUPABASE_ANON_KEY.",
         500
       );
     }
@@ -164,7 +163,7 @@ export async function POST(req: NextRequest) {
 
     const base64Pdf = buffer.toString("base64");
 
-    // ---- 4. Build Gemini Prompt & Inline PDF Payload ----
+    // ---- 4. Build System & User Prompt ----
     const prompt = `You are a precise resume parser. Extract information from the provided PDF resume document into ONLY valid JSON matching exactly this structure:
 
 {
@@ -218,74 +217,124 @@ Rules:
 - Preserve project names and technologies accurately.
 - Extract URLs such as GitHub and LinkedIn when present.`;
 
-    // ---- 5. Send PDF directly to Gemini via inlineData ----
-    let geminiRaw: string;
-    try {
-      const geminiRes = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
-        {
+    let geminiRaw: string = "";
+
+    const isOpenRouter = apiKey.startsWith("sk-or-");
+
+    if (isOpenRouter) {
+      // ---- OpenRouter API Handler ----
+      try {
+        const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            "Content-Type": "application/json",
+          },
           body: JSON.stringify({
-            contents: [
+            model: "google/gemini-2.5-flash",
+            max_tokens: 4000,
+            response_format: { type: "json_object" },
+            messages: [
               {
-                parts: [
+                role: "user",
+                content: [
                   {
-                    inlineData: {
-                      mimeType: "application/pdf",
-                      data: base64Pdf,
-                    },
+                    type: "image_url",
+                    image_url: { url: `data:application/pdf;base64,${base64Pdf}` },
                   },
                   {
+                    type: "text",
                     text: prompt,
                   },
                 ],
               },
             ],
-            generationConfig: {
-              temperature: 0.2,
-              responseMimeType: "application/json",
-            },
           }),
+        });
+
+        if (!res.ok) {
+          const errBody = await res.text().catch(() => "");
+          console.error("OpenRouter API error:", res.status, errBody);
+          return jsonError(
+            `AI request failed via OpenRouter (status ${res.status}). ${errBody}`,
+            502
+          );
         }
-      );
 
-      if (!geminiRes.ok) {
-        const errBody = await geminiRes.text().catch(() => "");
-        console.error("Gemini API error:", geminiRes.status, errBody);
-        return jsonError(
-          `Gemini AI request failed (status ${geminiRes.status}). Please check your GEMINI_API_KEY and try again.`,
-          502
+        const json = await res.json();
+        geminiRaw = json?.choices?.[0]?.message?.content ?? "";
+      } catch (err) {
+        console.error("OpenRouter request threw:", err);
+        return jsonError("Could not reach OpenRouter AI service. Please try again.", 502);
+      }
+    } else {
+      // ---- Direct Google Gemini API Handler ----
+      try {
+        const geminiRes = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              contents: [
+                {
+                  parts: [
+                    {
+                      inlineData: {
+                        mimeType: "application/pdf",
+                        data: base64Pdf,
+                      },
+                    },
+                    {
+                      text: prompt,
+                    },
+                  ],
+                },
+              ],
+              generationConfig: {
+                temperature: 0.2,
+                responseMimeType: "application/json",
+              },
+            }),
+          }
         );
-      }
 
-      const geminiJson = await geminiRes.json();
-      geminiRaw = geminiJson?.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+        if (!geminiRes.ok) {
+          const errBody = await geminiRes.text().catch(() => "");
+          console.error("Gemini API error:", geminiRes.status, errBody);
+          return jsonError(
+            `Gemini AI request failed (status ${geminiRes.status}). Please check your API key and try again.`,
+            502
+          );
+        }
 
-      if (!geminiRaw) {
-        console.error("Gemini returned no content:", JSON.stringify(geminiJson));
-        return jsonError("Gemini AI did not return any content for this resume.", 502);
+        const geminiJson = await geminiRes.json();
+        geminiRaw = geminiJson?.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+      } catch (err) {
+        console.error("Gemini request threw:", err);
+        return jsonError("Could not reach Gemini AI service. Please try again.", 502);
       }
-    } catch (err) {
-      console.error("Gemini request threw:", err);
-      return jsonError("Could not reach the Gemini AI service. Please try again.", 502);
     }
 
-    // ---- 6. Parse and Validate JSON ----
+    if (!geminiRaw) {
+      return jsonError("AI service did not return any content for this resume.", 502);
+    }
+
+    // ---- 5. Parse and Validate JSON ----
     let parsedResume: ResumeData;
     try {
       const jsonBlock = extractJsonBlock(geminiRaw);
       const rawParsed = JSON.parse(jsonBlock);
       parsedResume = normalizeResume(rawParsed);
     } catch (err) {
-      console.error("Failed to parse Gemini JSON:", err, geminiRaw);
+      console.error("Failed to parse AI JSON:", err, geminiRaw);
       return jsonError(
         "The AI response could not be parsed as valid resume data. Please try again.",
         502
       );
     }
 
-    // ---- 7. Insert into Supabase ----
+    // ---- 6. Insert into Supabase ----
     const supabase = createClient(supabaseUrl, supabaseKey);
 
     const { data: inserted, error: insertError } = await supabase
@@ -317,7 +366,7 @@ Rules:
       );
     }
 
-    // ---- 8. Return Success with portfolioId ----
+    // ---- 7. Return Success with portfolioId ----
     return NextResponse.json({
       success: true,
       portfolioId: inserted?.id,
