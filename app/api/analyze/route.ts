@@ -303,7 +303,7 @@ Rules:
           const errBody = await geminiRes.text().catch(() => "");
           console.error("Gemini API error:", geminiRes.status, errBody);
           return jsonError(
-            `Gemini AI request failed (status ${geminiRes.status}). Please check your API key and try again.`,
+            `AI request failed (status ${geminiRes.status}). Please set OPENROUTER_API_KEY in your Vercel Environment Variables and redeploy.`,
             502
           );
         }
