@@ -56,9 +56,9 @@ export default function HomePage() {
 
       const targetId = data?.portfolioId || data?.id;
       if (targetId) {
-        router.push(`/portfolio?id=${targetId}`);
+        window.location.href = `/portfolio?id=${targetId}`;
       } else {
-        router.push("/portfolio");
+        window.location.href = "/portfolio";
       }
     } catch (err) {
       setStatus("error");
