@@ -124,13 +124,13 @@ function normalizeResume(parsed: Record<string, unknown>): ResumeData {
 export async function POST(req: NextRequest) {
   try {
     // ---- 1. Check Environment Variables ----
-    const apiKey = process.env.GEMINI_API_KEY || process.env.OPENROUTER_API_KEY;
+    const apiKey = process.env.OPENROUTER_API_KEY || process.env.GEMINI_API_KEY;
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
     if (!apiKey || !supabaseUrl || !supabaseKey) {
       return jsonError(
-        "Server is missing required environment variables. Check GEMINI_API_KEY, NEXT_PUBLIC_SUPABASE_URL, and NEXT_PUBLIC_SUPABASE_ANON_KEY.",
+        "Server is missing required environment variables. Check OPENROUTER_API_KEY, NEXT_PUBLIC_SUPABASE_URL, and NEXT_PUBLIC_SUPABASE_ANON_KEY.",
         500
       );
     }
